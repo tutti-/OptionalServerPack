@@ -14,18 +14,26 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerResourcePackStatusEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * OptionalServerPack - lets each player choose whether optional
@@ -90,6 +98,16 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     // Poke Ball display fix while packs are being applied/removed
     // (config: pokeball-fix). See BallGhostFix.
     private final BallGhostFix ballGhostFix = new BallGhostFix(this);
+
+    // Empty-pack replacement for OFF (see removePacks): turning OFF pushes
+    // a generated empty pack under the same UUIDs, served by the embedded
+    // PackServer under this file name, so the client reports the OFF
+    // transition's completion like any other push.
+    private static final String EMPTY_PACK_FILE = "__osp_empty__.zip";
+    private String emptyPackUrl = null;
+    private byte[] emptyPackSha1 = null;
+    /** Pack UUIDs whose next terminal status belongs to an empty-pack OFF push, per player. */
+    private final Map<UUID, Set<UUID>> emptyOffPending = new LinkedHashMap<>();
 
     // ------------------------------------------------------------------
     // Lifecycle
@@ -172,6 +190,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         stopPackServer();
         packs.clear();
         packsById.clear();
+        migrateConfig();
         reloadConfig();
         FileConfiguration cfg = getConfig();
         joinDelayTicks = Math.max(0L, cfg.getLong("join-delay-ticks", 60L));
@@ -185,9 +204,6 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         messagePrefix = cfg.getString("messages.prefix", messagePrefix);
         messagePrefixEnabled = cfg.getBoolean("messages.prefix-enabled", true);
         ballGhostFix.enabled = cfg.getBoolean("pokeball-fix", true);
-        ballGhostFix.removeRestoreDelayTicks = Math.max(1L, cfg.getLong("pokeball-fix-restore-delay-ticks", 200L));
-        ballGhostFix.removeRestoreAgainTicks = Math.max(ballGhostFix.removeRestoreDelayTicks,
-                cfg.getLong("pokeball-fix-restore-again-ticks", 400L));
 
         int webPort = cfg.getInt("web-port", 8173);
         String publicHost = cfg.getString("public-host", "");
@@ -209,6 +225,22 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             } catch (IOException e) {
                 getLogger().severe("パック配信用Webサーバーの起動に失敗しました: " + e.getMessage());
                 packServer = null;
+            }
+        }
+
+        // Prepare the empty pack used for OFF (see removePacks). It is
+        // regenerated on every load so its bytes and SHA-1 always match
+        // what the PackServer serves.
+        emptyPackUrl = null;
+        emptyPackSha1 = null;
+        if (packServer != null) {
+            try {
+                byte[] empty = buildEmptyPackZip();
+                Files.write(new File(new File(getDataFolder(), "packs"), EMPTY_PACK_FILE).toPath(), empty);
+                emptyPackSha1 = MessageDigest.getInstance("SHA-1").digest(empty);
+                emptyPackUrl = "http://" + publicHost + ":" + webPort + "/" + EMPTY_PACK_FILE;
+            } catch (Exception e) {
+                getLogger().warning("空パックの生成に失敗しました（OFF時は通常の解除方式になります）: " + e.getMessage());
             }
         }
 
@@ -258,6 +290,20 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         }
     }
 
+    /** A minimal valid resource pack: pack.mcmeta only, fixed bytes so its SHA-1 is stable. */
+    private static byte[] buildEmptyPackZip() throws IOException {
+        String mcmeta = "{\"pack\":{\"pack_format\":34,\"description\":\"OptionalServerPack empty pack\"}}";
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(bos)) {
+            ZipEntry entry = new ZipEntry("pack.mcmeta");
+            entry.setTime(0L);
+            zos.putNextEntry(entry);
+            zos.write(mcmeta.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        return bos.toByteArray();
+    }
+
     private static byte[] sha1Of(File f) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-1");
         try (FileInputStream in = new FileInputStream(f)) {
@@ -277,6 +323,121 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // Config file versioning
+    // ------------------------------------------------------------------
+
+    /** Schema version of config.yml; the bundled config carries the same number. */
+    private static final int CONFIG_VERSION = 2;
+
+    /**
+     * Bring an existing config.yml up to CONFIG_VERSION: settings added
+     * by newer plugin versions are inserted into the file (so they can
+     * be discovered and edited), settings that no longer exist are
+     * removed, and the version stamp is updated. Values the user already
+     * has are never touched. Fresh installs ship a current config.yml
+     * and skip this entirely.
+     */
+    private void migrateConfig() {
+        File file = new File(getDataFolder(), "config.yml");
+        if (!file.isFile()) return;
+        try {
+            YamlConfiguration current = YamlConfiguration.loadConfiguration(file);
+            int version = current.getInt("config-version", 1);
+            if (version >= CONFIG_VERSION) return;
+            List<String> lines = new ArrayList<>(Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+            List<String> changes = new ArrayList<>();
+
+            // v2 removals: the scheduled-restore settings (the feature
+            // was removed in plugin 0.1.4 in favour of the empty-pack OFF).
+            for (String key : List.of("pokeball-fix-restore-delay-ticks", "pokeball-fix-restore-again-ticks")) {
+                if (removeTopLevelKey(lines, key)) changes.add("削除: " + key);
+            }
+            // v2 additions.
+            boolean prefixMissing = !current.contains("messages.prefix");
+            boolean prefixEnabledMissing = !current.contains("messages.prefix-enabled");
+            if (prefixMissing && prefixEnabledMissing) {
+                insertIntoSection(lines, "messages", List.of(
+                        "  # prefix（接頭辞）の表示オンオフと文言",
+                        "  prefix-enabled: true",
+                        "  prefix: \"&b[OptionalServerPack] &r\""));
+                changes.add("追加: messages.prefix / prefix-enabled");
+            } else {
+                if (prefixEnabledMissing) {
+                    insertIntoSection(lines, "messages", List.of("  prefix-enabled: true"));
+                    changes.add("追加: messages.prefix-enabled");
+                }
+                if (prefixMissing) {
+                    insertIntoSection(lines, "messages", List.of("  prefix: \"&b[OptionalServerPack] &r\""));
+                    changes.add("追加: messages.prefix");
+                }
+            }
+            if (!current.contains("pokeball-fix")) {
+                lines.add("");
+                lines.add("# ---- ポケボールの表示対策 ----");
+                lines.add("# パック切替中にボールをダミー表示に差し替える対策です。不要なら false にしてください。");
+                lines.add("pokeball-fix: true");
+                changes.add("追加: pokeball-fix");
+            }
+            setTopLevelScalar(lines, "config-version", String.valueOf(CONFIG_VERSION));
+            Files.write(file.toPath(), lines, StandardCharsets.UTF_8);
+            getLogger().info("config.yml をバージョン " + CONFIG_VERSION + " に更新しました（"
+                    + (changes.isEmpty() ? "バージョン番号のみ" : String.join("、", changes)) + "）。");
+        } catch (Exception e) {
+            getLogger().warning("config.yml の更新に失敗しました: " + e.getMessage());
+        }
+    }
+
+    /** Remove a top-level "key: ..." line. @return true if a line was removed */
+    private static boolean removeTopLevelKey(List<String> lines, String key) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).startsWith(key + ":")) {
+                lines.remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Set a top-level scalar key, replacing its line or adding one at the top. */
+    private static void setTopLevelScalar(List<String> lines, String key, String value) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).startsWith(key + ":")) {
+                lines.set(i, key + ": " + value);
+                return;
+            }
+        }
+        lines.add(0, key + ": " + value);
+    }
+
+    /** Insert lines right after the last entry of a top-level YAML section. */
+    private static void insertIntoSection(List<String> lines, String section, List<String> block) {
+        int start = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.equals(section + ":") || line.startsWith(section + ": ")) {
+                start = i;
+                break;
+            }
+        }
+        if (start < 0) {
+            lines.add(section + ":");
+            lines.addAll(block);
+            return;
+        }
+        int lastChild = start;
+        for (int i = start + 1; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.isBlank() || line.startsWith("#")) continue;
+            if (line.startsWith(" ") || line.startsWith("\t")) {
+                lastChild = i;
+                continue;
+            }
+            break;
+        }
+        lines.addAll(lastChild + 1, block);
     }
 
     // ------------------------------------------------------------------
@@ -343,8 +504,8 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
 
     private void sendPacks(Player player) {
         // Hide Poke Balls before the pack transition starts; they are
-        // restored when the client reports the pack as loaded (with a
-        // safety timer as a fallback). See BallGhostFix.
+        // restored when the client reports the pack as loaded. See
+        // BallGhostFix.
         if (!packs.isEmpty()) ballGhostFix.swap(player);
         String prompt = (promptText == null || promptText.isBlank()) ? null : promptText;
         for (PackDef def : packs) {
@@ -354,14 +515,31 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         }
     }
 
-    private void removePacks(Player player) {
-        // Same as sendPacks: a removal also reloads the client's
-        // resources, so hide the balls first. Note the client sends NO
-        // status response for a removal, so BallGhostFix restores on a
-        // schedule instead of waiting for a completion event.
-        if (!packs.isEmpty()) ballGhostFix.swapForRemoval(player);
-        for (PackDef def : packs) {
-            player.removeResourcePack(def.uuid);
+    /**
+     * Turn the packs OFF for a player who currently has them on.
+     *
+     * Instead of removing the packs, an empty pack is pushed under the
+     * same UUIDs (a replacement). A plain removal is answered by the
+     * client with complete silence - no status ever comes back - while a
+     * push reports ACCEPTED and then SUCCESSFULLY_LOADED after the
+     * reload, so the OFF transition becomes observable (the ball display
+     * fix restores on that signal, exactly like ON). Without the
+     * embedded pack server there is nowhere to host the empty pack, so
+     * fall back to a plain removal.
+     */
+    private void removePacks(Player player, boolean wasOn) {
+        if (!wasOn || packs.isEmpty()) return;
+        if (emptyPackUrl != null) {
+            ballGhostFix.swap(player);
+            Set<UUID> pending = emptyOffPending.computeIfAbsent(player.getUniqueId(), k -> new HashSet<>());
+            for (PackDef def : packs) {
+                pending.add(def.uuid);
+                player.addResourcePack(def.uuid, emptyPackUrl, emptyPackSha1, null, false);
+            }
+        } else {
+            for (PackDef def : packs) {
+                player.removeResourcePack(def.uuid);
+            }
         }
     }
 
@@ -384,6 +562,12 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         }, joinDelayTicks);
     }
 
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        emptyOffPending.remove(event.getPlayer().getUniqueId());
+        ballGhostFix.forget(event.getPlayer());
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPackStatus(PlayerResourcePackStatusEvent event) {
         // Ball display fix, for packs from ANY plugin (ItemsAdder's join
@@ -400,6 +584,20 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         PackDef def = packsById.get(event.getID());
         if (def == null) return; // not one of ours
         Player player = event.getPlayer();
+
+        // A status for an empty-pack OFF push is not an opt-in: consume
+        // the marker and leave the (already OFF) preference alone.
+        Set<UUID> pendingEmpty = emptyOffPending.get(player.getUniqueId());
+        if (pendingEmpty != null && pendingEmpty.contains(event.getID())) {
+            switch (event.getStatus()) {
+                case SUCCESSFULLY_LOADED, DECLINED, DISCARDED, FAILED_DOWNLOAD, FAILED_RELOAD, INVALID_URL -> {
+                    pendingEmpty.remove(event.getID());
+                    if (pendingEmpty.isEmpty()) emptyOffPending.remove(player.getUniqueId());
+                }
+                default -> { /* ACCEPTED / DOWNLOADED: still in flight */ }
+            }
+            return;
+        }
         switch (event.getStatus()) {
             case SUCCESSFULLY_LOADED -> {
                 if (!Boolean.TRUE.equals(preference(player.getUniqueId()))) {
@@ -475,11 +673,12 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
 
     private boolean applyChoice(CommandSender sender, Player target, boolean on) {
         if (target == null) return true;
+        boolean wasOn = Boolean.TRUE.equals(preference(target.getUniqueId()));
         setPreference(target.getUniqueId(), on);
         if (on) {
             sendPacks(target);
         } else {
-            removePacks(target);
+            removePacks(target, wasOn);
         }
         sendConfigured(target, on ? messageOn : messageOff);
         if (!sender.equals(target)) {

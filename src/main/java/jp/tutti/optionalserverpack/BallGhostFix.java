@@ -1,16 +1,12 @@
 package jp.tutti.optionalserverpack;
 
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitTask;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -19,28 +15,17 @@ import java.util.UUID;
  * resource pack is being applied or removed: while a pack transition is
  * in flight, Poke Balls in the player's inventory are visually replaced
  * with a "Loading..." placeholder (packet-only; the server-side
- * inventory is never modified), and the real inventory is re-sent once
- * the transition has completed.
+ * inventory is never modified), and the real inventory is re-sent when
+ * the client reports the transition as complete.
  *
- * <p>Restore timing is the tricky part, because the two transitions
- * behave very differently on a vanilla 1.21.1 client (verified against
- * the decompiled client code, ServerPackManager):
- * <ul>
- *   <li>Push: the client reports ACCEPTED, then SUCCESSFULLY_LOADED
- *       after the reload finishes. Restoring on the terminal status
- *       (see the plugin's PlayerResourcePackStatusEvent listener) is
- *       exactly right.</li>
- *   <li>Removal: the client sends NO status response at all
- *       (RemovalReason.SERVER_REMOVED has a null serverResponse), so
- *       there is no completion signal to wait for. The restore therefore
- *       runs on a schedule: a first re-send after
- *       {@code removeRestoreDelayTicks}, and a final one after
- *       {@code removeRestoreAgainTicks}. Each re-send makes the client
- *       re-render the inventory with whatever resources are current at
- *       that moment, so the final one - after the reload - is the one
- *       that fixes the display. A terminal status, should one ever
- *       arrive anyway, restores immediately and cancels the schedule.</li>
- * </ul>
+ * <p>Restore is purely status-driven (see the plugin's
+ * PlayerResourcePackStatusEvent listener): pushes report ACCEPTED and
+ * then a terminal status after the reload. A plain pack REMOVAL reports
+ * nothing at all on a vanilla 1.21.1 client (verified in the decompiled
+ * ServerPackManager: RemovalReason.SERVER_REMOVED has a null
+ * serverResponse), which is why this plugin turns OFF into a push of an
+ * empty pack under the same UUID - a replacement goes through the full
+ * push flow, so its completion is reported like any other push.
  *
  * <p>Everything below talks to the server internals (NMS) through
  * reflection only, so the plugin still compiles against the plain
@@ -52,18 +37,12 @@ final class BallGhostFix {
 
     private static final Set<String> COVERED_ITEMS =
             Set.of("pixelmon:poke_ball", "pixelmon:poke_ball_lid");
-    /** Backstop for the push flow, in case no terminal status ever arrives. */
-    private static final long PUSH_SAFETY_TICKS = 600L; // 30 seconds
 
     private final OptionalServerPack plugin;
     volatile boolean enabled = true;
-    volatile long removeRestoreDelayTicks = 200L; // 10 seconds
-    volatile long removeRestoreAgainTicks = 400L; // 20 seconds
 
     private Boolean available; // null = not probed yet
     private final Set<UUID> ghosted = new HashSet<>();
-    private final Map<UUID, Integer> generations = new HashMap<>();
-    private final Map<UUID, List<BukkitTask>> pending = new HashMap<>();
 
     // Reflective handles, resolved lazily on first use.
     private Method getHandleMethod;
@@ -101,81 +80,27 @@ final class BallGhostFix {
     // and from its resource-pack status listener)
     // ------------------------------------------------------------------
 
-    /** Hide the balls because a pack PUSH is starting (status-driven restore). */
+    /** Hide the balls because a pack transition is starting. */
     synchronized void swap(Player player) {
-        startSwap(player, false);
+        if (!enabled || ghosted.contains(player.getUniqueId())) return;
+        if (!ensureAvailable(player)) return;
+        try {
+            sendGhostPackets(player);
+            ghosted.add(player.getUniqueId());
+        } catch (Throwable t) {
+            fail(t);
+        }
     }
 
-    /** Hide the balls because a pack REMOVAL is starting (scheduled restore). */
-    synchronized void swapForRemoval(Player player) {
-        startSwap(player, true);
-    }
-
-    /** Restore immediately: a terminal pack status arrived for this player. */
+    /** Restore the real inventory: a terminal pack status arrived. */
     synchronized void restore(Player player) {
-        UUID id = player.getUniqueId();
-        if (!ghosted.remove(id)) return;
-        generations.merge(id, 1, Integer::sum);
-        cancelPending(id);
+        if (!ghosted.remove(player.getUniqueId())) return;
         sendRestorePackets(player);
     }
 
-    // ------------------------------------------------------------------
-    // Swap / restore scheduling
-    // ------------------------------------------------------------------
-
-    private void startSwap(Player player, boolean removal) {
-        if (!enabled) return;
-        UUID id = player.getUniqueId();
-        if (!ghosted.contains(id)) {
-            if (!ensureAvailable(player)) return;
-            try {
-                sendGhostPackets(player);
-            } catch (Throwable t) {
-                fail(t);
-                return;
-            }
-            ghosted.add(id);
-        }
-        // (Re-)arm the restore schedule for this transition. Bumping the
-        // generation invalidates tasks scheduled by an earlier transition.
-        int gen = generations.merge(id, 1, Integer::sum);
-        cancelPending(id);
-        List<BukkitTask> tasks = new ArrayList<>();
-        if (removal) {
-            tasks.add(schedule(() -> {
-                synchronized (BallGhostFix.this) {
-                    if (isCurrent(id, gen)) sendRestorePackets(player);
-                }
-            }, removeRestoreDelayTicks));
-            tasks.add(schedule(() -> {
-                synchronized (BallGhostFix.this) {
-                    if (isCurrent(id, gen)) restore(player);
-                }
-            }, removeRestoreAgainTicks));
-        } else {
-            tasks.add(schedule(() -> {
-                synchronized (BallGhostFix.this) {
-                    if (isCurrent(id, gen)) restore(player);
-                }
-            }, PUSH_SAFETY_TICKS));
-        }
-        pending.put(id, tasks);
-    }
-
-    private boolean isCurrent(UUID id, int gen) {
-        return ghosted.contains(id) && generations.getOrDefault(id, 0) == gen;
-    }
-
-    private BukkitTask schedule(Runnable task, long delayTicks) {
-        return plugin.getServer().getScheduler().runTaskLater(plugin, task, Math.max(1L, delayTicks));
-    }
-
-    private void cancelPending(UUID id) {
-        List<BukkitTask> tasks = pending.remove(id);
-        if (tasks != null) {
-            for (BukkitTask task : tasks) task.cancel();
-        }
+    /** Forget a player without sending anything (e.g. they quit mid-transition). */
+    synchronized void forget(Player player) {
+        ghosted.remove(player.getUniqueId());
     }
 
     // ------------------------------------------------------------------
