@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'jp.tutti'
-version = '1.2.1'
+version = '2.0.0'
 
 repositories {
     mavenCentral()
@@ -28,5 +28,5 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
-    archiveFileName = "ModelPackToggle-${project.version}.jar"
+    archiveFileName = "OptionalServerPack-${project.version}.jar"
 }

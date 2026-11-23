@@ -1,9 +1,19 @@
-# ModelPackToggle
+# OptionalServerPack
 
 プレイヤーごとに「任意のリソースパックを適用するか」を選べるようにする Bukkit/Paper 系プラグインです。
 他のプラグインが適用するパックには一切触りません（強制パックはそのプラグイン自身の適用に任せ、このプラグインは任意パック専用です）。
 
 ## 変更点
+
+### 2.0.0
+- **プラグイン名を ModelPackToggle から OptionalServerPack に変更**。これに伴い以下も変わります：
+  - コマンド：`/optionalserverpack`（短縮形 `/serverpack`、`/osp` も使えます）
+  - プレースホルダー：`%optionalserverpack_status%` / `%optionalserverpack_on%`
+  - 権限：`optionalserverpack.use` / `optionalserverpack.admin`
+  - データフォルダ：`plugins/OptionalServerPack/`
+- 旧フォルダ（`plugins/ModelPackToggle/`）があれば、初回起動時に config・プレイヤー設定・パックを**自動で引き継ぎます**。
+  移行手順は「旧 jar を削除して新 jar を入れる」だけです（旧 jar を残すと両方動いてしまうので必ず削除してください）
+- パックの UUID は旧名時代から変えていないので、プレイヤー側で再ダウンロードや再承認は発生しません
 
 ### 1.2.1
 - 説明文を汎用的な表現に変更（特定のパック前提の文言を削除）。動作変更はありません
@@ -19,48 +29,50 @@
 ## 動作確認状況
 
 - Paper 1.21.1 サーバーでの起動・パック配信（内蔵Webサーバー）・コマンド動作を確認済み
-- PlaceholderAPI 2.12.3 との同時起動と、プレースホルダーの登録（expansion: modelpacktoggle）を確認済み。
+- PlaceholderAPI 2.12.3 との同時起動と、プレースホルダーの登録（expansion: optionalserverpack）を確認済み。
   プレースホルダーの「値」そのものは実プレイヤーでしか確認できないため、ゲーム内で
-  `/papi parse 自分の名前 %modelpacktoggle_status%` を実行して確認してください
+  `/papi parse 自分の名前 %optionalserverpack_status%` を実行して確認してください
   （コンソールの papi parse は、参加したことのあるプレイヤーにしか使えません）
 - Arclight 実機での確認はまだです（標準の Bukkit API だけで作ってあるので動く見込みですが、初回は念のためテストを）
 
 ## 導入手順
 
-1. `ModelPackToggle-1.2.1.jar` をサーバーの `plugins/` フォルダに入れて再起動
-   → `plugins/ModelPackToggle/`（config.yml と packs/ フォルダ）が生成されます
-   ※ 旧バージョンからの更新は jar の差し替えだけでOKです（config はそのまま使えます。
+1. `OptionalServerPack-2.0.0.jar` をサーバーの `plugins/` フォルダに入れて再起動
+   → `plugins/OptionalServerPack/`（config.yml と packs/ フォルダ）が生成されます
+   ※ ModelPackToggle（1.x）からの移行：**旧 jar を削除して**新 jar を入れるだけです。
+     旧データフォルダから config・プレイヤー設定・パックが自動で引き継がれます
+   ※ 1.x 内での更新は jar の差し替えだけでOKでした（config はそのまま使えます。
      新しい設定項目はデフォルト値で動きます。項目を書きたい場合は config.yml を開いて追記してください）
-2. 適用したいパックの zip を `plugins/ModelPackToggle/packs/` に置く
+2. 適用したいパックの zip を `plugins/OptionalServerPack/packs/` に置く
    （ファイル名は config.yml の `packs:` の file 名と一致させる。デフォルトではサンプル名が書いてあるので、実際のパック名に書き換えてください）
-3. `plugins/ModelPackToggle/config.yml` を編集：
+3. `plugins/OptionalServerPack/config.yml` を編集：
    - `public-host:` に、プレイヤーがサーバーへ接続するのと同じ公開アドレス（DDNS名やグローバルIP）
    - `web-port: 8173` をルーター／ファイアウォールで開放（プレイヤーがパックをダウンロードするために必要。ItemsAdder の自前ホスティングと同じ考え方）
-4. 再起動するか、コンソールで `modelpack reload`
+4. 再起動するか、コンソールで `serverpack reload`
 
 ## プレイヤー側の動き
 
 - **デフォルトはOFF**。参加しても何も送られず、確認メッセージも出ません
 - 使いたいプレイヤーが自分で有効化します：
-  - `/modelpack on` — 有効化（その場でパックが送られます。クライアントの「サーバーリソースパック」設定が「確認する」の場合、そのときだけ確認画面が出ます）
-  - `/modelpack off` — 無効化（その場でパックを外します）
-  - `/modelpack toggle` / `/modelpack status`
+  - `/serverpack on` — 有効化（その場でパックが送られます。クライアントの「サーバーリソースパック」設定が「確認する」の場合、そのときだけ確認画面が出ます）
+  - `/serverpack off` — 無効化（その場でパックを外します）
+  - `/serverpack toggle` / `/serverpack status`
 - ONにしたプレイヤーには、次回以降の参加時に自動で送り直します（確認画面は基本出ません）
-- 選択は `plugins/ModelPackToggle/preferences.yml` に保存されます
+- 選択は `plugins/OptionalServerPack/preferences.yml` に保存されます
 
 ## PlaceholderAPI 連携
 
 PlaceholderAPI が入っているサーバーでは、次のプレースホルダーが使えます（スコアボードやタブリスト、メニュー表示用）。
 入っていないサーバーでは連携部分だけ無効になり、プラグイン自体は通常通り動きます。
 
-- `%modelpacktoggle_status%` — そのプレイヤーの状態表示（デフォルト: `ON` / `OFF` / `未選択`）
-- `%modelpacktoggle_on%` — ONなら `true`、それ以外は `false`（条件分岐用）
+- `%optionalserverpack_status%` — そのプレイヤーの状態表示（デフォルト: `ON` / `OFF` / `未選択`）
+- `%optionalserverpack_on%` — ONなら `true`、それ以外は `false`（条件分岐用）
 
 表示文言は config.yml の `placeholder:` で変更できます（古い config のままでもデフォルト値で動きます）。
 
 ## メッセージ設定
 
-`/modelpack on` / `off` を実行したときにプレイヤーへ表示されるメッセージは、config.yml の `messages:` で変更できます。
+`/serverpack on` / `off` を実行したときにプレイヤーへ表示されるメッセージは、config.yml の `messages:` で変更できます。
 
 - `messages.on` — ONにしたとき
 - `messages.off` — OFFにしたとき
@@ -71,13 +83,13 @@ PlaceholderAPI が入っているサーバーでは、次のプレースホル�
 - **空文字にするとそのメッセージは表示されません**
 - `&` の色コードが使えます（例: `&a有効化しました`）
 - `%player%` がプレイヤー名に置き換わります
-- 変更は `/modelpack reload` で反映されます（古い config のままでもデフォルト文言で動きます）
+- 変更は `/serverpack reload` で反映されます（古い config のままでもデフォルト文言で動きます）
 
 ## 管理者向け
 
-- `/modelpack reload` — **管理者専用**です（権限 `modelpack.admin`、デフォルトはOPのみ。コンソールからは常に実行可）。
+- `/serverpack reload` — **管理者専用**です（権限 `optionalserverpack.admin`、デフォルトはOPのみ。コンソールからは常に実行可）。
   config・パック・設定を再読み込みします（zip を差し替えたら実行。SHA-1 は自動で再計算されます）
-- `/modelpack on <プレイヤー名>` など、他プレイヤーの指定も管理者専用です
+- `/serverpack on <プレイヤー名>` など、他プレイヤーの指定も管理者専用です
 
 ## 注意・ヒント
 

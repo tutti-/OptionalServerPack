@@ -1,4 +1,4 @@
-# ModelPackToggle 設定
+# OptionalServerPack 設定
 #
 # このプラグインは「任意パック」だけを担当します。
 # 他のプラグインのパックは、そのプラグイン自身の適用に任せてください
@@ -9,25 +9,25 @@
 join-delay-ticks: 60
 
 # パックのプロンプトに表示する文言（空文字で非表示）
-prompt: "任意リソースパックを適用しますか？（あとから /modelpack で変更できます）"
+prompt: "任意リソースパックを適用しますか？（あとから /serverpack で変更できます）"
 
 # ---- PlaceholderAPI 連携（PlaceholderAPI が入っている場合のみ有効） ----
-# %modelpacktoggle_status% で表示される文言です。
-# （%modelpacktoggle_on% は true/false を返します）
+# %optionalserverpack_status% で表示される文言です。
+# （%optionalserverpack_on% は true/false を返します）
 placeholder:
   on: "ON"
   off: "OFF"
   none: "未選択"   # まだ選んでいないプレイヤー
 
 # ---- メッセージ設定 ----
-# /modelpack on / off を実行したとき（と、パック確認画面で拒否したとき）に
+# /serverpack on / off を実行したとき（と、パック確認画面で拒否したとき）に
 # プレイヤーへ表示されるメッセージです。
 # 空文字にするとそのメッセージは表示されません。
 # & の色コードと %player%（プレイヤー名）が使えます。
 messages:
-  on: "モデルパックをONにしました。"
-  off: "モデルパックをOFFにしました。"
-  declined: "モデルパックをOFFにしました。有効化するには &e/modelpack on&r を実行してください。"
+  on: "リソースパックをONにしました。"
+  off: "リソースパックをOFFにしました。"
+  declined: "リソースパックをOFFにしました。有効化するには &e/serverpack on&r を実行してください。"
 
 # ---- 自前ホスティング（file 指定のパックがある場合に使います） ----
 
@@ -42,8 +42,8 @@ web-port: 8173
 public-host: ""
 
 # ---- パック一覧 ----
-# file: plugins/ModelPackToggle/packs/ フォルダ内の zip ファイル名
-#       （SHA-1 は自動計算します。zip を差し替えたら /modelpack reload）
+# file: plugins/OptionalServerPack/packs/ フォルダ内の zip ファイル名
+#       （SHA-1 は自動計算します。zip を差し替えたら /serverpack reload）
 # url : 外部ホスティング済みの直リンク。sha1 も併せて書いてください。
 # 下記はサンプルです。使うパックに合わせて name / file を書き換えてください（複数書けます）。
 packs:
