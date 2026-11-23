@@ -6,6 +6,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -18,35 +19,51 @@ import java.util.UUID;
  * resource pack is being applied or removed: while a pack transition is
  * in flight, Poke Balls in the player's inventory are visually replaced
  * with a "Loading..." placeholder (packet-only; the server-side
- * inventory is never modified), and the real inventory is re-sent when
- * the transition completes.
+ * inventory is never modified), and the real inventory is re-sent once
+ * the transition has completed.
  *
- * <p>This mirrors what the PokeBallPackFix mod does, but driven by this
- * plugin itself: the plugin knows exactly when it pushes or removes a
- * pack, and Bukkit's PlayerResourcePackStatusEvent reports progress for
- * packs from any plugin (including the removal reload, which has no
- * ACCEPTED phase). A safety timer restores the inventory even if no
- * terminal status ever arrives, so items can never get stuck as
- * placeholders.
+ * <p>Restore timing is the tricky part, because the two transitions
+ * behave very differently on a vanilla 1.21.1 client (verified against
+ * the decompiled client code, ServerPackManager):
+ * <ul>
+ *   <li>Push: the client reports ACCEPTED, then SUCCESSFULLY_LOADED
+ *       after the reload finishes. Restoring on the terminal status
+ *       (see the plugin's PlayerResourcePackStatusEvent listener) is
+ *       exactly right.</li>
+ *   <li>Removal: the client sends NO status response at all
+ *       (RemovalReason.SERVER_REMOVED has a null serverResponse), so
+ *       there is no completion signal to wait for. The restore therefore
+ *       runs on a schedule: a first re-send after
+ *       {@code removeRestoreDelayTicks}, and a final one after
+ *       {@code removeRestoreAgainTicks}. Each re-send makes the client
+ *       re-render the inventory with whatever resources are current at
+ *       that moment, so the final one - after the reload - is the one
+ *       that fixes the display. A terminal status, should one ever
+ *       arrive anyway, restores immediately and cancels the schedule.</li>
+ * </ul>
  *
  * <p>Everything below talks to the server internals (NMS) through
  * reflection only, so the plugin still compiles against the plain
  * Bukkit/Paper API and simply disables this feature when the expected
- * classes are not reachable (it was written for 1.21.1 Mojang-mapped
- * servers such as Arclight / Paper).
+ * classes are not reachable (written for 1.21.1 Mojang-mapped servers
+ * such as Arclight / Paper).
  */
 final class BallGhostFix {
 
     private static final Set<String> COVERED_ITEMS =
             Set.of("pixelmon:poke_ball", "pixelmon:poke_ball_lid");
-    private static final long SAFETY_RESTORE_TICKS = 120L; // 6 seconds
+    /** Backstop for the push flow, in case no terminal status ever arrives. */
+    private static final long PUSH_SAFETY_TICKS = 600L; // 30 seconds
 
     private final OptionalServerPack plugin;
     volatile boolean enabled = true;
+    volatile long removeRestoreDelayTicks = 200L; // 10 seconds
+    volatile long removeRestoreAgainTicks = 400L; // 20 seconds
 
     private Boolean available; // null = not probed yet
     private final Set<UUID> ghosted = new HashSet<>();
-    private final Map<UUID, BukkitTask> timers = new HashMap<>();
+    private final Map<UUID, Integer> generations = new HashMap<>();
+    private final Map<UUID, List<BukkitTask>> pending = new HashMap<>();
 
     // Reflective handles, resolved lazily on first use.
     private Method getHandleMethod;
@@ -84,48 +101,113 @@ final class BallGhostFix {
     // and from its resource-pack status listener)
     // ------------------------------------------------------------------
 
+    /** Hide the balls because a pack PUSH is starting (status-driven restore). */
     synchronized void swap(Player player) {
-        if (!enabled || ghosted.contains(player.getUniqueId())) return;
-        if (!ensureAvailable(player)) return;
-        try {
-            Object handle = getHandleMethod.invoke(player);
-            Object menu = inventoryMenuField.get(handle);
-            Object inventory = getInventoryMethod.invoke(handle);
-            int size = (int) invGetContainerSize.invoke(inventory);
-            Object ghost = null;
-            for (int i = 0; i < size; i++) {
-                Object stack = invGetItem.invoke(inventory, i);
-                if (stack == null || (boolean) stackIsEmpty.invoke(stack)) continue;
-                Object key = registryGetKey.invoke(itemRegistry, stackGetItem.invoke(stack));
-                if (key == null || !COVERED_ITEMS.contains(key.toString())) continue;
-                if (ghost == null) ghost = createGhostItem();
-                int stateId = (int) menuIncrementStateId.invoke(menu);
-                sendPacket(handle, setSlotCtor.newInstance(0, stateId, toContainerSlot(i), ghost));
+        startSwap(player, false);
+    }
+
+    /** Hide the balls because a pack REMOVAL is starting (scheduled restore). */
+    synchronized void swapForRemoval(Player player) {
+        startSwap(player, true);
+    }
+
+    /** Restore immediately: a terminal pack status arrived for this player. */
+    synchronized void restore(Player player) {
+        UUID id = player.getUniqueId();
+        if (!ghosted.remove(id)) return;
+        generations.merge(id, 1, Integer::sum);
+        cancelPending(id);
+        sendRestorePackets(player);
+    }
+
+    // ------------------------------------------------------------------
+    // Swap / restore scheduling
+    // ------------------------------------------------------------------
+
+    private void startSwap(Player player, boolean removal) {
+        if (!enabled) return;
+        UUID id = player.getUniqueId();
+        if (!ghosted.contains(id)) {
+            if (!ensureAvailable(player)) return;
+            try {
+                sendGhostPackets(player);
+            } catch (Throwable t) {
+                fail(t);
+                return;
             }
-            ghosted.add(player.getUniqueId());
-            BukkitTask timer = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            ghosted.add(id);
+        }
+        // (Re-)arm the restore schedule for this transition. Bumping the
+        // generation invalidates tasks scheduled by an earlier transition.
+        int gen = generations.merge(id, 1, Integer::sum);
+        cancelPending(id);
+        List<BukkitTask> tasks = new ArrayList<>();
+        if (removal) {
+            tasks.add(schedule(() -> {
                 synchronized (BallGhostFix.this) {
-                    restore(player);
+                    if (isCurrent(id, gen)) sendRestorePackets(player);
                 }
-            }, SAFETY_RESTORE_TICKS);
-            timers.put(player.getUniqueId(), timer);
-        } catch (Throwable t) {
-            fail(t);
+            }, removeRestoreDelayTicks));
+            tasks.add(schedule(() -> {
+                synchronized (BallGhostFix.this) {
+                    if (isCurrent(id, gen)) restore(player);
+                }
+            }, removeRestoreAgainTicks));
+        } else {
+            tasks.add(schedule(() -> {
+                synchronized (BallGhostFix.this) {
+                    if (isCurrent(id, gen)) restore(player);
+                }
+            }, PUSH_SAFETY_TICKS));
+        }
+        pending.put(id, tasks);
+    }
+
+    private boolean isCurrent(UUID id, int gen) {
+        return ghosted.contains(id) && generations.getOrDefault(id, 0) == gen;
+    }
+
+    private BukkitTask schedule(Runnable task, long delayTicks) {
+        return plugin.getServer().getScheduler().runTaskLater(plugin, task, Math.max(1L, delayTicks));
+    }
+
+    private void cancelPending(UUID id) {
+        List<BukkitTask> tasks = pending.remove(id);
+        if (tasks != null) {
+            for (BukkitTask task : tasks) task.cancel();
         }
     }
 
-    synchronized void restore(Player player) {
-        if (!ghosted.remove(player.getUniqueId())) return;
-        BukkitTask timer = timers.remove(player.getUniqueId());
-        if (timer != null) timer.cancel();
+    // ------------------------------------------------------------------
+    // Packet work (reflection)
+    // ------------------------------------------------------------------
+
+    private void sendGhostPackets(Player player) throws Exception {
+        Object handle = getHandleMethod.invoke(player);
+        Object menu = inventoryMenuField.get(handle);
+        Object inventory = getInventoryMethod.invoke(handle);
+        int size = (int) invGetContainerSize.invoke(inventory);
+        Object ghost = null;
+        for (int i = 0; i < size; i++) {
+            Object stack = invGetItem.invoke(inventory, i);
+            if (stack == null || (boolean) stackIsEmpty.invoke(stack)) continue;
+            Object key = registryGetKey.invoke(itemRegistry, stackGetItem.invoke(stack));
+            if (key == null || !COVERED_ITEMS.contains(key.toString())) continue;
+            if (ghost == null) ghost = createGhostItem();
+            int stateId = (int) menuIncrementStateId.invoke(menu);
+            sendPacket(handle, setSlotCtor.newInstance(0, stateId, toContainerSlot(i), ghost));
+        }
+    }
+
+    private void sendRestorePackets(Player player) {
         if (!player.isOnline() || !ensureAvailable(player)) return;
         try {
             Object handle = getHandleMethod.invoke(player);
             Object menu = inventoryMenuField.get(handle);
             Object items = nonNullListCreate.invoke(null);
+            @SuppressWarnings("unchecked")
+            List<Object> copy = (List<Object>) items;
             for (Object stack : (List<?>) menuGetItems.invoke(menu)) {
-                @SuppressWarnings("unchecked")
-                List<Object> copy = (List<Object>) items;
                 copy.add(stackCopy.invoke(stack));
             }
             Object carried = stackCopy.invoke(menuGetCarried.invoke(menu));
@@ -135,10 +217,6 @@ final class BallGhostFix {
             fail(t);
         }
     }
-
-    // ------------------------------------------------------------------
-    // Internals
-    // ------------------------------------------------------------------
 
     private Object createGhostItem() throws Exception {
         Object ghost = stackCtor.newInstance(barrierItem);

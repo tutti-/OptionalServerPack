@@ -45,6 +45,13 @@ messages:
 # 不要な場合や不具合がある場合は false にしてください。
 pokeball-fix: true
 
+# パック「解除」時の戻しタイミング（tick: 20 = 1秒）。
+# 解除時はクライアントから完了通知が来ない仕様のため、時間で戻します。
+# まず restore-delay で1回戻し、restore-again でもう1回戻して確定させます。
+# 解除後の再読み込みが重い環境では大きめにしてください。
+pokeball-fix-restore-delay-ticks: 200
+pokeball-fix-restore-again-ticks: 400
+
 # ---- 自前ホスティング（file 指定のパックがある場合に使います） ----
 
 # 配信用Webサーバーのポート。ルーター側でこのポートへのアクセスを

@@ -185,6 +185,9 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         messagePrefix = cfg.getString("messages.prefix", messagePrefix);
         messagePrefixEnabled = cfg.getBoolean("messages.prefix-enabled", true);
         ballGhostFix.enabled = cfg.getBoolean("pokeball-fix", true);
+        ballGhostFix.removeRestoreDelayTicks = Math.max(1L, cfg.getLong("pokeball-fix-restore-delay-ticks", 200L));
+        ballGhostFix.removeRestoreAgainTicks = Math.max(ballGhostFix.removeRestoreDelayTicks,
+                cfg.getLong("pokeball-fix-restore-again-ticks", 400L));
 
         int webPort = cfg.getInt("web-port", 8173);
         String publicHost = cfg.getString("public-host", "");
@@ -353,10 +356,10 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
 
     private void removePacks(Player player) {
         // Same as sendPacks: a removal also reloads the client's
-        // resources, so hide the balls first. (The client never reports
-        // ACCEPTED for a removal, which is why this cannot be left to
-        // status events alone.)
-        if (!packs.isEmpty()) ballGhostFix.swap(player);
+        // resources, so hide the balls first. Note the client sends NO
+        // status response for a removal, so BallGhostFix restores on a
+        // schedule instead of waiting for a completion event.
+        if (!packs.isEmpty()) ballGhostFix.swapForRemoval(player);
         for (PackDef def : packs) {
             player.removeResourcePack(def.uuid);
         }
