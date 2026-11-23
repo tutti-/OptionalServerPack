@@ -1,0 +1,233 @@
+package jp.tutti.optionalserverpack;
+
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * Workaround for Pixelmon's Poke Ball display breaking while a server
+ * resource pack is being applied or removed: while a pack transition is
+ * in flight, Poke Balls in the player's inventory are visually replaced
+ * with a "Loading..." placeholder (packet-only; the server-side
+ * inventory is never modified), and the real inventory is re-sent when
+ * the transition completes.
+ *
+ * <p>This mirrors what the PokeBallPackFix mod does, but driven by this
+ * plugin itself: the plugin knows exactly when it pushes or removes a
+ * pack, and Bukkit's PlayerResourcePackStatusEvent reports progress for
+ * packs from any plugin (including the removal reload, which has no
+ * ACCEPTED phase). A safety timer restores the inventory even if no
+ * terminal status ever arrives, so items can never get stuck as
+ * placeholders.
+ *
+ * <p>Everything below talks to the server internals (NMS) through
+ * reflection only, so the plugin still compiles against the plain
+ * Bukkit/Paper API and simply disables this feature when the expected
+ * classes are not reachable (it was written for 1.21.1 Mojang-mapped
+ * servers such as Arclight / Paper).
+ */
+final class BallGhostFix {
+
+    private static final Set<String> COVERED_ITEMS =
+            Set.of("pixelmon:poke_ball", "pixelmon:poke_ball_lid");
+    private static final long SAFETY_RESTORE_TICKS = 120L; // 6 seconds
+
+    private final OptionalServerPack plugin;
+    volatile boolean enabled = true;
+
+    private Boolean available; // null = not probed yet
+    private final Set<UUID> ghosted = new HashSet<>();
+    private final Map<UUID, BukkitTask> timers = new HashMap<>();
+
+    // Reflective handles, resolved lazily on first use.
+    private Method getHandleMethod;
+    private Field connectionField;
+    private Method connectionSend;
+    private Method getInventoryMethod;
+    private Method invGetContainerSize;
+    private Method invGetItem;
+    private Method stackIsEmpty;
+    private Method stackGetItem;
+    private Method stackCopy;
+    private Method stackSet;
+    private Object itemRegistry;
+    private Method registryGetKey;
+    private Object barrierItem;
+    private Constructor<?> stackCtor;
+    private Object customNameType;
+    private Object loreType;
+    private Method componentLiteral;
+    private Constructor<?> loreCtor;
+    private Constructor<?> setSlotCtor;
+    private Constructor<?> setContentCtor;
+    private Method nonNullListCreate;
+    private Field inventoryMenuField;
+    private Method menuIncrementStateId;
+    private Method menuGetItems;
+    private Method menuGetCarried;
+
+    BallGhostFix(OptionalServerPack plugin) {
+        this.plugin = plugin;
+    }
+
+    // ------------------------------------------------------------------
+    // Public operations (called from the plugin's pack push/remove paths
+    // and from its resource-pack status listener)
+    // ------------------------------------------------------------------
+
+    synchronized void swap(Player player) {
+        if (!enabled || ghosted.contains(player.getUniqueId())) return;
+        if (!ensureAvailable(player)) return;
+        try {
+            Object handle = getHandleMethod.invoke(player);
+            Object menu = inventoryMenuField.get(handle);
+            Object inventory = getInventoryMethod.invoke(handle);
+            int size = (int) invGetContainerSize.invoke(inventory);
+            Object ghost = null;
+            for (int i = 0; i < size; i++) {
+                Object stack = invGetItem.invoke(inventory, i);
+                if (stack == null || (boolean) stackIsEmpty.invoke(stack)) continue;
+                Object key = registryGetKey.invoke(itemRegistry, stackGetItem.invoke(stack));
+                if (key == null || !COVERED_ITEMS.contains(key.toString())) continue;
+                if (ghost == null) ghost = createGhostItem();
+                int stateId = (int) menuIncrementStateId.invoke(menu);
+                sendPacket(handle, setSlotCtor.newInstance(0, stateId, toContainerSlot(i), ghost));
+            }
+            ghosted.add(player.getUniqueId());
+            BukkitTask timer = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                synchronized (BallGhostFix.this) {
+                    restore(player);
+                }
+            }, SAFETY_RESTORE_TICKS);
+            timers.put(player.getUniqueId(), timer);
+        } catch (Throwable t) {
+            fail(t);
+        }
+    }
+
+    synchronized void restore(Player player) {
+        if (!ghosted.remove(player.getUniqueId())) return;
+        BukkitTask timer = timers.remove(player.getUniqueId());
+        if (timer != null) timer.cancel();
+        if (!player.isOnline() || !ensureAvailable(player)) return;
+        try {
+            Object handle = getHandleMethod.invoke(player);
+            Object menu = inventoryMenuField.get(handle);
+            Object items = nonNullListCreate.invoke(null);
+            for (Object stack : (List<?>) menuGetItems.invoke(menu)) {
+                @SuppressWarnings("unchecked")
+                List<Object> copy = (List<Object>) items;
+                copy.add(stackCopy.invoke(stack));
+            }
+            Object carried = stackCopy.invoke(menuGetCarried.invoke(menu));
+            int stateId = (int) menuIncrementStateId.invoke(menu);
+            sendPacket(handle, setContentCtor.newInstance(0, stateId, items, carried));
+        } catch (Throwable t) {
+            fail(t);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Internals
+    // ------------------------------------------------------------------
+
+    private Object createGhostItem() throws Exception {
+        Object ghost = stackCtor.newInstance(barrierItem);
+        stackSet.invoke(ghost, customNameType, componentLiteral.invoke(null, "Poke Ball Loading..."));
+        Object lore = loreCtor.newInstance(List.of(componentLiteral.invoke(null, "Please wait.")));
+        stackSet.invoke(ghost, loreType, lore);
+        return ghost;
+    }
+
+    private void sendPacket(Object serverPlayer, Object packet) throws Exception {
+        Object connection = connectionField.get(serverPlayer);
+        connectionSend.invoke(connection, packet);
+    }
+
+    /** Map an inventory index to a slot of the player inventory container (window 0). */
+    private static int toContainerSlot(int inventoryIndex) {
+        if (inventoryIndex < 9) {
+            return inventoryIndex + 36;          // hotbar
+        } else if (inventoryIndex < 36) {
+            return inventoryIndex;               // main inventory
+        } else if (inventoryIndex < 40) {
+            return 8 - (inventoryIndex - 36);    // armor: head..feet -> 5..8
+        } else {
+            return 45;                           // offhand
+        }
+    }
+
+    private void fail(Throwable t) {
+        if (Boolean.TRUE.equals(available)) {
+            plugin.getLogger().warning("ポケボールの表示対策でエラーが発生したため、この機能を無効化します: " + t);
+        }
+        available = false;
+    }
+
+    private boolean ensureAvailable(Player probe) {
+        if (available != null) return available;
+        try {
+            Class<?> packetClass = Class.forName("net.minecraft.network.protocol.Packet");
+            Class<?> serverPlayerClass = Class.forName("net.minecraft.server.level.ServerPlayer");
+            Class<?> itemStackClass = Class.forName("net.minecraft.world.item.ItemStack");
+
+            getHandleMethod = probe.getClass().getMethod("getHandle");
+            connectionField = serverPlayerClass.getField("connection");
+            connectionSend = Class.forName("net.minecraft.server.network.ServerCommonPacketListenerImpl")
+                    .getMethod("send", packetClass);
+            getInventoryMethod = serverPlayerClass.getMethod("getInventory");
+            Class<?> inventoryClass = Class.forName("net.minecraft.world.entity.player.Inventory");
+            invGetContainerSize = inventoryClass.getMethod("getContainerSize");
+            invGetItem = inventoryClass.getMethod("getItem", int.class);
+            stackIsEmpty = itemStackClass.getMethod("isEmpty");
+            stackGetItem = itemStackClass.getMethod("getItem");
+            stackCopy = itemStackClass.getMethod("copy");
+            stackSet = itemStackClass.getMethod("set",
+                    Class.forName("net.minecraft.core.component.DataComponentType"), Object.class);
+
+            itemRegistry = Class.forName("net.minecraft.core.registries.BuiltInRegistries")
+                    .getField("ITEM").get(null);
+            registryGetKey = itemRegistry.getClass().getMethod("getKey", Object.class);
+            barrierItem = Class.forName("net.minecraft.world.item.Items").getField("BARRIER").get(null);
+            stackCtor = itemStackClass.getConstructor(Class.forName("net.minecraft.world.level.ItemLike"));
+
+            Class<?> dataComponents = Class.forName("net.minecraft.core.component.DataComponents");
+            customNameType = dataComponents.getField("CUSTOM_NAME").get(null);
+            loreType = dataComponents.getField("LORE").get(null);
+            componentLiteral = Class.forName("net.minecraft.network.chat.Component")
+                    .getMethod("literal", String.class);
+            loreCtor = Class.forName("net.minecraft.world.item.component.ItemLore")
+                    .getConstructor(List.class);
+
+            setSlotCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket")
+                    .getConstructor(int.class, int.class, int.class, itemStackClass);
+            Class<?> nonNullListClass = Class.forName("net.minecraft.core.NonNullList");
+            setContentCtor = Class.forName("net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket")
+                    .getConstructor(int.class, int.class, nonNullListClass, itemStackClass);
+            nonNullListCreate = nonNullListClass.getMethod("create");
+
+            inventoryMenuField = Class.forName("net.minecraft.world.entity.player.Player")
+                    .getField("inventoryMenu");
+            Class<?> menuClass = Class.forName("net.minecraft.world.inventory.AbstractContainerMenu");
+            menuIncrementStateId = menuClass.getMethod("incrementStateId");
+            menuGetItems = menuClass.getMethod("getItems");
+            menuGetCarried = menuClass.getMethod("getCarried");
+
+            available = true;
+            plugin.getLogger().info("ポケボールの表示対策（パック切替中のダミー表示）を有効化しました。");
+        } catch (Throwable t) {
+            available = false;
+            plugin.getLogger().warning("ポケボールの表示対策を利用できませんでした（このサーバーでは無効になります）: " + t);
+        }
+        return available;
+    }
+}
