@@ -1,0 +1,20 @@
+name: ModelPackToggle
+version: 1.2.0
+main: jp.tutti.modelpacktoggle.ModelPackToggle
+api-version: '1.21'
+softdepend:
+  - PlaceholderAPI
+author: tutti
+description: プレイヤーごとに任意リソースパック（モデルパック）の適用を選べるようにする
+commands:
+  modelpack:
+    description: モデルパックのON/OFFを切り替えます
+    usage: /modelpack [on|off|toggle|status]
+    permission: modelpack.use
+permissions:
+  modelpack.use:
+    description: /modelpack を使う
+    default: true
+  modelpack.admin:
+    description: 他プレイヤーの設定変更と reload
+    default: op

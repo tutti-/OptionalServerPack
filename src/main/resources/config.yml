@@ -1,0 +1,56 @@
+# ModelPackToggle 設定
+#
+# このプラグインは「任意パック」だけを担当します。
+# ItemsAdder のパックは ItemsAdder 自身の適用に任せてください
+# （このプラグインは他のプラグインのパックには一切触りません）。
+
+# 参加後、パックを送るまでの遅延（tick: 20 = 1秒）。
+# ItemsAdder のパック画面と競合しないよう、少し空けるのがおすすめです。
+join-delay-ticks: 60
+
+# パックのプロンプトに表示する文言（空文字で非表示）
+prompt: "Cobblemonモデルパックを適用しますか？（任意・あとから /modelpack で変更できます）"
+
+# ---- PlaceholderAPI 連携（PlaceholderAPI が入っている場合のみ有効） ----
+# %modelpacktoggle_status% で表示される文言です。
+# （%modelpacktoggle_on% は true/false を返します）
+placeholder:
+  on: "ON"
+  off: "OFF"
+  none: "未選択"   # まだ選んでいないプレイヤー
+
+# ---- メッセージ設定 ----
+# /modelpack on / off を実行したとき（と、パック確認画面で拒否したとき）に
+# プレイヤーへ表示されるメッセージです。
+# 空文字にするとそのメッセージは表示されません。
+# & の色コードと %player%（プレイヤー名）が使えます。
+messages:
+  on: "モデルパックをONにしました。"
+  off: "モデルパックをOFFにしました。"
+  declined: "モデルパックをOFFにしました。有効化するには &e/modelpack on&r を実行してください。"
+
+# ---- 自前ホスティング（file 指定のパックがある場合に使います） ----
+
+# 配信用Webサーバーのポート。ルーター側でこのポートへのアクセスを
+# 許可してください（ItemsAdder の自前ホスティングと同じ考え方です）。
+# ItemsAdder のデフォルト(8163)と被らない番号にしています。
+web-port: 8173
+
+# プレイヤーがパックをダウンロードするときに使うホスト名/IP。
+# プレイヤーがサーバーに接続するのと同じ公開アドレス（DDNS名やIP）を
+# 書いてください。未設定だと localhost 扱いになり警告が出ます。
+public-host: ""
+
+# ---- パック一覧 ----
+# file: plugins/ModelPackToggle/packs/ フォルダ内の zip ファイル名
+#       （SHA-1 は自動計算します。zip を差し替えたら /modelpack reload）
+# url : 外部ホスティング済みの直リンク。sha1 も併せて書いてください。
+packs:
+  - name: all
+    file: cobblemon-models-for-pixelmon-all-fix28.zip
+  - name: plus
+    file: cobblemon-models-for-pixelmon-plus-fix28.zip
+  # 外部URLの例:
+  # - name: extra
+  #   url: "https://example.com/pack.zip"
+  #   sha1: "0123456789abcdef0123456789abcdef01234567"
