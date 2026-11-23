@@ -85,8 +85,9 @@ final class BallGhostFix {
         if (!enabled || ghosted.contains(player.getUniqueId())) return;
         if (!ensureAvailable(player)) return;
         try {
-            sendGhostPackets(player);
+            int hidden = sendGhostPackets(player);
             ghosted.add(player.getUniqueId());
+            plugin.getLogger().info("【診断】" + player.getName() + " のボールを " + hidden + " 個ダミー表示にしました");
         } catch (Throwable t) {
             fail(t);
         }
@@ -95,6 +96,7 @@ final class BallGhostFix {
     /** Restore the real inventory: a terminal pack status arrived. */
     synchronized void restore(Player player) {
         if (!ghosted.remove(player.getUniqueId())) return;
+        plugin.getLogger().info("【診断】" + player.getName() + " のボールを復元します");
         sendRestorePackets(player);
     }
 
@@ -107,11 +109,12 @@ final class BallGhostFix {
     // Packet work (reflection)
     // ------------------------------------------------------------------
 
-    private void sendGhostPackets(Player player) throws Exception {
+    private int sendGhostPackets(Player player) throws Exception {
         Object handle = getHandleMethod.invoke(player);
         Object menu = inventoryMenuField.get(handle);
         Object inventory = getInventoryMethod.invoke(handle);
         int size = (int) invGetContainerSize.invoke(inventory);
+        int hidden = 0;
         Object ghost = null;
         for (int i = 0; i < size; i++) {
             Object stack = invGetItem.invoke(inventory, i);
@@ -121,7 +124,9 @@ final class BallGhostFix {
             if (ghost == null) ghost = createGhostItem();
             int stateId = (int) menuIncrementStateId.invoke(menu);
             sendPacket(handle, setSlotCtor.newInstance(0, stateId, toContainerSlot(i), ghost));
+            hidden++;
         }
+        return hidden;
     }
 
     private void sendRestorePackets(Player player) {

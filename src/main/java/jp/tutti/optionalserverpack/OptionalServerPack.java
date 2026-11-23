@@ -239,6 +239,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
                 Files.write(new File(new File(getDataFolder(), "packs"), EMPTY_PACK_FILE).toPath(), empty);
                 emptyPackSha1 = MessageDigest.getInstance("SHA-1").digest(empty);
                 emptyPackUrl = "http://" + publicHost + ":" + webPort + "/" + EMPTY_PACK_FILE;
+                getLogger().info("【診断】空パックを用意しました: " + emptyPackUrl + " (" + empty.length + " bytes)");
             } catch (Exception e) {
                 getLogger().warning("空パックの生成に失敗しました（OFF時は通常の解除方式になります）: " + e.getMessage());
             }
@@ -530,6 +531,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     private void removePacks(Player player, boolean wasOn) {
         if (!wasOn || packs.isEmpty()) return;
         if (emptyPackUrl != null) {
+            getLogger().info("【診断】" + player.getName() + " に空パックを送って OFF にします: " + emptyPackUrl);
             ballGhostFix.swap(player);
             Set<UUID> pending = emptyOffPending.computeIfAbsent(player.getUniqueId(), k -> new HashSet<>());
             for (PackDef def : packs) {
@@ -537,6 +539,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
                 player.addResourcePack(def.uuid, emptyPackUrl, emptyPackSha1, null, false);
             }
         } else {
+            getLogger().info("【診断】" + player.getName() + " は通常の解除方式（pop）で OFF にします（空パック未用意）");
             for (PackDef def : packs) {
                 player.removeResourcePack(def.uuid);
             }
@@ -570,6 +573,15 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPackStatus(PlayerResourcePackStatusEvent event) {
+        // 【診断】全ステータスを記録する（0.1.5 の切り分け用）
+        {
+            Set<UUID> diagPending = emptyOffPending.get(event.getPlayer().getUniqueId());
+            getLogger().info("【診断】パックステータス: player=" + event.getPlayer().getName()
+                    + " status=" + event.getStatus()
+                    + " id=" + String.valueOf(event.getID()).substring(0, 8)
+                    + " ours=" + packsById.containsKey(event.getID())
+                    + " emptyPending=" + (diagPending != null && diagPending.contains(event.getID())));
+        }
         // Ball display fix, for packs from ANY plugin (ItemsAdder's join
         // pack included): hide the balls when a push is accepted, and
         // restore the real inventory on any terminal status.
