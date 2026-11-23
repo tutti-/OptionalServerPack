@@ -5,8 +5,8 @@
 
 ## 変更点
 
-### 2.0.0
-- **プラグイン名を ModelPackToggle から OptionalServerPack に変更**。これに伴い以下も変わります：
+### 0.1.0
+- **プラグイン名を ModelPackToggle から OptionalServerPack に変更**（改名後の初回リリースのため、バージョンは 0.1.0 から振り直し）。これに伴い以下も変わります：
   - コマンド：`/optionalserverpack`（短縮形 `/serverpack`、`/osp` も使えます）
   - プレースホルダー：`%optionalserverpack_status%` / `%optionalserverpack_on%`
   - 権限：`optionalserverpack.use` / `optionalserverpack.admin`
@@ -37,7 +37,7 @@
 
 ## 導入手順
 
-1. `OptionalServerPack-2.0.0.jar` をサーバーの `plugins/` フォルダに入れて再起動
+1. `OptionalServerPack-0.1.0.jar` をサーバーの `plugins/` フォルダに入れて再起動
    → `plugins/OptionalServerPack/`（config.yml と packs/ フォルダ）が生成されます
    ※ ModelPackToggle（1.x）からの移行：**旧 jar を削除して**新 jar を入れるだけです。
      旧データフォルダから config・プレイヤー設定・パックが自動で引き継がれます

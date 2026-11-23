@@ -117,7 +117,8 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     // ------------------------------------------------------------------
 
     /**
-     * Before 2.0 this plugin was called ModelPackToggle, so its data
+     * This plugin was formerly called ModelPackToggle (the 1.x series),
+     * so its data
      * folder was plugins/ModelPackToggle. If that folder exists and the
      * new folder has not been set up yet, copy config.yml,
      * preferences.yml and the packs folder across, so upgrading is just
