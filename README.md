@@ -5,10 +5,13 @@
 
 ## 変更点
 
+### 0.1.2
+- メッセージの prefix（接頭辞）の設定をシンプルにしました：表示のオンオフは `messages.prefix-enabled`（true/false）、文言は `messages.prefix` です
+
 ### 0.1.1
 - ポケボールの表示対策を内蔵：パックの適用・解除でリソースが再読み込みされる間、インベントリ内のポケボール（`pixelmon:poke_ball` とその蓋 `pixelmon:poke_ball_lid`）をダミー表示に差し替え、完了後に本物を再表示します（サーバー側の実物は変更しません）。このプラグインの切替だけでなく、ItemsAdder など他のプラグインのパック適用時にも働きます。config の `pokeball-fix: false` で無効化できます
   - ※ PokeBallPackFix（mod）側の対策は「パック削除」の検知が実サーバーで効かなかったため、このプラグイン側で確実に動く方式にしました。mod はそのままでも併用できます（二重に差し替えても実害はありません）
-- メッセージの prefix（接頭辞）を config で変更可能に：`messages.prefix`（共通）、`messages.prefix-on` / `messages.prefix-off`（ON時 / OFF時だけ別の接頭辞。declined は OFF時と同じ）
+- メッセージの prefix（接頭辞）を config で変更可能にしました
 
 ### 0.1.0
 - 初回リリース
@@ -22,7 +25,7 @@
 ## 動作確認状況
 
 - Paper 1.21.1 サーバーでの起動・パック配信（内蔵Webサーバー）・コマンド動作を確認済み
-- 0.1.1 は Arclight 1.21.1（FeudalKings 1.0.1）でも起動確認済みです。ただしポケボール表示対策の実際の切り替え動作はクライアントが必要なため、実サーバーで `/serverpack off` 時にボールが崩れないか確認してください
+- 0.1.1 は Paper / Arclight 1.21.1（FeudalKings 1.0.1）の両方、0.1.2 は Arclight で起動確認済みです。ただしポケボール表示対策の実際の切り替え動作はクライアントが必要なため、実サーバーで `/serverpack off` 時にボールが崩れないか確認してください
 - PlaceholderAPI 2.12.3 との同時起動と、プレースホルダーの登録（expansion: optionalserverpack）を確認済み。
   プレースホルダーの「値」そのものは実プレイヤーでしか確認できないため、ゲーム内で
   `/papi parse 自分の名前 %optionalserverpack_status%` を実行して確認してください
@@ -30,7 +33,7 @@
 
 ## 導入手順
 
-1. `OptionalServerPack-0.1.1.jar` をサーバーの `plugins/` フォルダに入れて再起動（0.1.0 からの更新は jar の差し替えだけです）
+1. `OptionalServerPack-0.1.2.jar` をサーバーの `plugins/` フォルダに入れて再起動（0.1.x 内の更新は jar の差し替えだけです）
    → `plugins/OptionalServerPack/`（config.yml と packs/ フォルダ）が生成されます
    ※ ModelPackToggle（1.x）からの移行：**旧 jar を削除して**新 jar を入れるだけです。
      旧データフォルダから config・プレイヤー設定・パックが自動で引き継がれます
@@ -70,8 +73,8 @@ PlaceholderAPI が入っているサーバーでは、次のプレースホル�
 - `messages.on` — ONにしたとき
 - `messages.off` — OFFにしたとき
 - `messages.declined` — パックの確認画面で拒否されたとき
-- `messages.prefix` — 全メッセージ共通の接頭辞（デフォルト: `&b[OptionalServerPack] &r`）。空文字で接頭辞なしになります
-- `messages.prefix-on` / `messages.prefix-off` — ON時 / OFF時のメッセージだけ別の接頭辞にしたい場合に書きます（未設定なら共通の prefix。declined は OFF時と同じ接頭辞です）
+- `messages.prefix-enabled` — prefix（接頭辞）を表示するか（true/false、デフォルト: true）
+- `messages.prefix` — prefix の文言（デフォルト: `&b[OptionalServerPack] &r`）
 
 共通の仕様：
 

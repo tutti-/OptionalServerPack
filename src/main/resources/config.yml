@@ -26,14 +26,11 @@ placeholder:
 # & の色コードと %player%（プレイヤー名）が使えます。
 #
 # prefix は全メッセージ共通の接頭辞です（コマンドの応答にも付きます）。
-# 空文字にすると接頭辞なしになります。
-# prefix-on / prefix-off を書くと、ON時 / OFF時のメッセージだけ
-# 共通とは別の接頭辞にできます（declined は OFF時と同じ接頭辞です）。
-# 行自体を消すか未設定のままにすると共通の prefix が使われます。
+# prefix-enabled が false のときは接頭辞を表示しません。
+# prefix の文言自体も変更できます（空文字でも表示されなくなります）。
 messages:
+  prefix-enabled: true
   prefix: "&b[OptionalServerPack] &r"
-  # prefix-on: "&a[ON] &r"
-  # prefix-off: "&c[OFF] &r"
   on: "リソースパックをONにしました。"
   off: "リソースパックをOFFにしました。"
   declined: "リソースパックをOFFにしました。有効化するには &e/serverpack on&r を実行してください。"

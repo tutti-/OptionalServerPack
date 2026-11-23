@@ -81,13 +81,11 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     private String messageOff = "リソースパックをOFFにしました。";
     private String messageDeclined = "リソースパックをOFFにしました。有効化するには &e/serverpack on&r を実行してください。";
 
-    // Message prefixes (config: messages.prefix / prefix-on / prefix-off).
-    // prefix-on / prefix-off override the shared prefix for the ON / OFF
-    // messages only; null = fall back to the shared prefix. An empty
-    // shared prefix disables prefixes entirely.
+    // Message prefix (config: messages.prefix / messages.prefix-enabled).
+    // prefix-enabled=false hides the prefix on every message; the prefix
+    // text itself is messages.prefix (an empty text also hides it).
     private String messagePrefix = "&b[OptionalServerPack] &r";
-    private String messagePrefixOn = null;
-    private String messagePrefixOff = null;
+    private boolean messagePrefixEnabled = true;
 
     // Poke Ball display fix while packs are being applied/removed
     // (config: pokeball-fix). See BallGhostFix.
@@ -185,8 +183,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         messageOff = cfg.getString("messages.off", messageOff);
         messageDeclined = cfg.getString("messages.declined", messageDeclined);
         messagePrefix = cfg.getString("messages.prefix", messagePrefix);
-        messagePrefixOn = cfg.getString("messages.prefix-on", null);
-        messagePrefixOff = cfg.getString("messages.prefix-off", null);
+        messagePrefixEnabled = cfg.getBoolean("messages.prefix-enabled", true);
         ballGhostFix.enabled = cfg.getBoolean("pokeball-fix", true);
 
         int webPort = cfg.getInt("web-port", 8173);
@@ -411,7 +408,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
                 if (wasOn) {
                     setPreference(player.getUniqueId(), false);
                     if (event.getStatus() == PlayerResourcePackStatusEvent.Status.DECLINED) {
-                        sendConfigured(player, messageDeclined, messagePrefixOff);
+                        sendConfigured(player, messageDeclined);
                     }
                 }
             }
@@ -440,16 +437,16 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             case "status" -> { return showStatus(sender, targetOf(sender, args.length > 1 ? args[1] : null)); }
             case "reload" -> {
                 if (!sender.hasPermission("optionalserverpack.admin")) {
-                    sender.sendMessage(chatPrefix(null) + "権限がありません。");
+                    sender.sendMessage(chatPrefix() + "権限がありません。");
                     return true;
                 }
                 loadPreferences();
                 loadPacks();
-                sender.sendMessage(chatPrefix(null) + "設定を再読み込みしました（パック " + packs.size() + " 件）。");
+                sender.sendMessage(chatPrefix() + "設定を再読み込みしました（パック " + packs.size() + " 件）。");
                 return true;
             }
             default -> {
-                sender.sendMessage(chatPrefix(null) + "使い方: /serverpack [on|off|toggle|status]");
+                sender.sendMessage(chatPrefix() + "使い方: /serverpack [on|off|toggle|status]");
                 return true;
             }
         }
@@ -459,17 +456,17 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     private Player targetOf(CommandSender sender, String nameArg) {
         if (nameArg != null) {
             if (!sender.hasPermission("optionalserverpack.admin")) {
-                sender.sendMessage(chatPrefix(null) + "他のプレイヤーを指定するには管理者権限が必要です。");
+                sender.sendMessage(chatPrefix() + "他のプレイヤーを指定するには管理者権限が必要です。");
                 return null;
             }
             Player target = Bukkit.getPlayerExact(nameArg);
             if (target == null) {
-                sender.sendMessage(chatPrefix(null) + "プレイヤーが見つかりません: " + nameArg);
+                sender.sendMessage(chatPrefix() + "プレイヤーが見つかりません: " + nameArg);
             }
             return target;
         }
         if (sender instanceof Player p) return p;
-        sender.sendMessage(chatPrefix(null) + "コンソールからはプレイヤー名を指定してください: /serverpack <on|off> <player>");
+        sender.sendMessage(chatPrefix() + "コンソールからはプレイヤー名を指定してください: /serverpack <on|off> <player>");
         return null;
     }
 
@@ -481,47 +478,41 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         } else {
             removePacks(target);
         }
-        sendConfigured(target, on ? messageOn : messageOff, on ? messagePrefixOn : messagePrefixOff);
+        sendConfigured(target, on ? messageOn : messageOff);
         if (!sender.equals(target)) {
-            sender.sendMessage(chatPrefix(null) + target.getName() + " のリソースパックを" + (on ? "ON" : "OFF") + "にしました。");
+            sender.sendMessage(chatPrefix() + target.getName() + " のリソースパックを" + (on ? "ON" : "OFF") + "にしました。");
         }
         return true;
     }
 
     /**
-     * The chat prefix for a message: the per-state override when one is
-     * configured, otherwise the shared messages.prefix. '&' colour codes
-     * are translated; an empty result means no prefix at all.
+     * The chat prefix for plugin messages: empty when the prefix is
+     * disabled (messages.prefix-enabled=false) or the configured text is
+     * empty; otherwise messages.prefix with '&' colour codes translated.
      */
-    private String chatPrefix(String override) {
-        String raw = override != null ? override : messagePrefix;
-        if (raw == null || raw.isEmpty()) return "";
-        return ChatColor.translateAlternateColorCodes('&', raw);
+    private String chatPrefix() {
+        if (!messagePrefixEnabled || messagePrefix == null || messagePrefix.isEmpty()) return "";
+        return ChatColor.translateAlternateColorCodes('&', messagePrefix);
     }
 
     /**
      * Send a config-defined message to a player: '&' colour codes are
      * translated, %player% is replaced with the player's name, and an
-     * empty/blank text sends nothing at all. The prefix is the shared
-     * messages.prefix unless a per-state override is given.
+     * empty/blank text sends nothing at all.
      */
     private void sendConfigured(Player player, String raw) {
-        sendConfigured(player, raw, null);
-    }
-
-    private void sendConfigured(Player player, String raw, String prefixOverride) {
         if (raw == null || raw.isBlank()) return;
         String text = ChatColor.translateAlternateColorCodes('&', raw.replace("%player%", player.getName()));
-        player.sendMessage(chatPrefix(prefixOverride) + text);
+        player.sendMessage(chatPrefix() + text);
     }
 
     private boolean showStatus(CommandSender sender, Player target) {
         if (target == null) return true;
         Boolean pref = preference(target.getUniqueId());
         String state = pref == null ? "OFF（未選択＝デフォルト）" : (pref ? "ON" : "OFF");
-        sender.sendMessage(chatPrefix(null) + target.getName() + " のリソースパック: " + state);
+        sender.sendMessage(chatPrefix() + target.getName() + " のリソースパック: " + state);
         if (sender.equals(target)) {
-            sender.sendMessage(chatPrefix(null) + "切り替え: §e/serverpack on§r / §e/serverpack off");
+            sender.sendMessage(chatPrefix() + "切り替え: §e/serverpack on§r / §e/serverpack off");
         }
         return true;
     }
