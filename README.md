@@ -6,25 +6,13 @@
 ## 変更点
 
 ### 0.1.0
-- **プラグイン名を ModelPackToggle から OptionalServerPack に変更**（改名後の初回リリースのため、バージョンは 0.1.0 から振り直し）。これに伴い以下も変わります：
-  - コマンド：`/optionalserverpack`（短縮形 `/serverpack`、`/osp` も使えます）
-  - プレースホルダー：`%optionalserverpack_status%` / `%optionalserverpack_on%`
-  - 権限：`optionalserverpack.use` / `optionalserverpack.admin`
-  - データフォルダ：`plugins/OptionalServerPack/`
-- 旧フォルダ（`plugins/ModelPackToggle/`）があれば、初回起動時に config・プレイヤー設定・パックを**自動で引き継ぎます**。
-  移行手順は「旧 jar を削除して新 jar を入れる」だけです（旧 jar を残すと両方動いてしまうので必ず削除してください）
-- パックの UUID は旧名時代から変えていないので、プレイヤー側で再ダウンロードや再承認は発生しません
+- 初回リリース
+- 任意のサーバーリソースパックをプレイヤーごとに ON/OFF 可能（デフォルトは OFF、参加時のプロンプトなし）
+- ON にしたプレイヤーには参加時に自動で再送
+- PlaceholderAPI 連携（`%optionalserverpack_status%` / `%optionalserverpack_on%`）
+- ON/OFF 時のメッセージを config で変更可能
+- 旧プラグイン ModelPackToggle からの設定・データの自動移行に対応
 
-### 1.2.1
-- 説明文を汎用的な表現に変更（特定のパック前提の文言を削除）。動作変更はありません
-
-### 1.2.0
-- **ON/OFF時のメッセージを設定可能に**：config.yml の `messages:` で変更できます（下記「メッセージ設定」）
-
-### 1.1.0
-- **デフォルトOFFに変更**：参加時に確認メッセージ（パックのプロンプト）は出なくなりました。
-  何もしていないプレイヤーはOFFのままです。ONにしたプレイヤーにだけ、参加のたびに自動で送り直します
-- **PlaceholderAPI 連携を追加**（下記）
 
 ## 動作確認状況
 
