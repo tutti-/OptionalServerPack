@@ -417,7 +417,8 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             if (!current.contains("pokeball-fix")) {
                 lines.add("");
                 lines.add("# ---- Pixelmon向けボールテクスチャ対策 ----");
-                lines.add("# パック切替中にボールをダミー表示に差し替える対策です。不要なら false にしてください。");
+                lines.add("# パックの適用・解除でリソースが再読み込みされる間、インベントリ内のボールの表示が崩れる問題への対策。");
+                lines.add("# 不要な場合や不具合がある場合は false にしてください。");
                 lines.add("pokeball-fix: true");
                 changes.add("追加: pokeball-fix");
             }
@@ -425,8 +426,9 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             if (!current.contains("empty-pack-url")) {
                 lines.add("");
                 lines.add("# ---- OFF 用の空パック（外部URL運用時） ----");
-                lines.add("# パックを外部URLで配信している場合は、空パックの zip を同じ場所に置いて");
-                lines.add("# そのURLを設定してください。自前ホスティング時は空欄のままで大丈夫です。");
+                lines.add("# オプションリソースパックをOFF にするとき、パックの「置き換え」に使う空パックのURLです。");
+                lines.add("# パックを自前ホスティング（下の packs 設定でファイル名だけ指定）している場合は、");
+                lines.add("# プラグインが空パックを自動生成して配信するので空欄で大丈夫です。");
                 lines.add("empty-pack-url: \"\"");
                 changes.add("追加: empty-pack-url");
             }
