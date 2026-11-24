@@ -1,5 +1,5 @@
 name: OptionalServerPack
-version: 0.1.5
+version: 0.1.7
 main: jp.tutti.optionalserverpack.OptionalServerPack
 api-version: '1.21'
 softdepend:

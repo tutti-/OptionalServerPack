@@ -22,6 +22,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
@@ -239,9 +242,22 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
                 Files.write(new File(new File(getDataFolder(), "packs"), EMPTY_PACK_FILE).toPath(), empty);
                 emptyPackSha1 = MessageDigest.getInstance("SHA-1").digest(empty);
                 emptyPackUrl = "http://" + publicHost + ":" + webPort + "/" + EMPTY_PACK_FILE;
-                getLogger().info("【診断】空パックを用意しました: " + emptyPackUrl + " (" + empty.length + " bytes)");
             } catch (Exception e) {
                 getLogger().warning("空パックの生成に失敗しました（OFF時は通常の解除方式になります）: " + e.getMessage());
+            }
+        }
+        if (emptyPackUrl == null) {
+            // External-URL setups run no PackServer: fetch the hosted
+            // empty pack once to learn its SHA-1 (config: empty-pack-url).
+            String ext = cfg.getString("empty-pack-url", "");
+            if (ext != null && !ext.isBlank()) {
+                try {
+                    byte[] data = fetchBytes(ext.trim());
+                    emptyPackSha1 = MessageDigest.getInstance("SHA-1").digest(data);
+                    emptyPackUrl = ext.trim();
+                } catch (Exception e) {
+                    getLogger().warning("empty-pack-url の空パックを取得できませんでした（OFF時は通常の解除方式になります）: " + e.getMessage());
+                }
             }
         }
 
@@ -291,6 +307,29 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
         }
     }
 
+    /** Download a small file (the hosted empty pack) to compute its SHA-1. */
+    private static byte[] fetchBytes(String url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+        conn.setConnectTimeout(10_000);
+        conn.setReadTimeout(10_000);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("User-Agent", "OptionalServerPack");
+        try (InputStream in = conn.getInputStream();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int n;
+            int total = 0;
+            while ((n = in.read(buf)) != -1) {
+                total += n;
+                if (total > 1_000_000) throw new IOException("file too large for an empty pack");
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        } finally {
+            conn.disconnect();
+        }
+    }
+
     /** A minimal valid resource pack: pack.mcmeta only, fixed bytes so its SHA-1 is stable. */
     private static byte[] buildEmptyPackZip() throws IOException {
         String mcmeta = "{\"pack\":{\"pack_format\":34,\"description\":\"OptionalServerPack empty pack\"}}";
@@ -331,7 +370,7 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     // ------------------------------------------------------------------
 
     /** Schema version of config.yml; the bundled config carries the same number. */
-    private static final int CONFIG_VERSION = 2;
+    private static final int CONFIG_VERSION = 3;
 
     /**
      * Bring an existing config.yml up to CONFIG_VERSION: settings added
@@ -377,10 +416,19 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
             }
             if (!current.contains("pokeball-fix")) {
                 lines.add("");
-                lines.add("# ---- ポケボールの表示対策 ----");
+                lines.add("# ---- Pixelmon向けボールテクスチャ対策 ----");
                 lines.add("# パック切替中にボールをダミー表示に差し替える対策です。不要なら false にしてください。");
                 lines.add("pokeball-fix: true");
                 changes.add("追加: pokeball-fix");
+            }
+            // v3 additions (plugin 0.1.6).
+            if (!current.contains("empty-pack-url")) {
+                lines.add("");
+                lines.add("# ---- OFF 用の空パック（外部URL運用時） ----");
+                lines.add("# パックを外部URLで配信している場合は、空パックの zip を同じ場所に置いて");
+                lines.add("# そのURLを設定してください。自前ホスティング時は空欄のままで大丈夫です。");
+                lines.add("empty-pack-url: \"\"");
+                changes.add("追加: empty-pack-url");
             }
             setTopLevelScalar(lines, "config-version", String.valueOf(CONFIG_VERSION));
             Files.write(file.toPath(), lines, StandardCharsets.UTF_8);
@@ -531,7 +579,6 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
     private void removePacks(Player player, boolean wasOn) {
         if (!wasOn || packs.isEmpty()) return;
         if (emptyPackUrl != null) {
-            getLogger().info("【診断】" + player.getName() + " に空パックを送って OFF にします: " + emptyPackUrl);
             ballGhostFix.swap(player);
             Set<UUID> pending = emptyOffPending.computeIfAbsent(player.getUniqueId(), k -> new HashSet<>());
             for (PackDef def : packs) {
@@ -539,7 +586,6 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
                 player.addResourcePack(def.uuid, emptyPackUrl, emptyPackSha1, null, false);
             }
         } else {
-            getLogger().info("【診断】" + player.getName() + " は通常の解除方式（pop）で OFF にします（空パック未用意）");
             for (PackDef def : packs) {
                 player.removeResourcePack(def.uuid);
             }
@@ -573,15 +619,6 @@ public final class OptionalServerPack extends JavaPlugin implements Listener, Co
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPackStatus(PlayerResourcePackStatusEvent event) {
-        // 【診断】全ステータスを記録する（0.1.5 の切り分け用）
-        {
-            Set<UUID> diagPending = emptyOffPending.get(event.getPlayer().getUniqueId());
-            getLogger().info("【診断】パックステータス: player=" + event.getPlayer().getName()
-                    + " status=" + event.getStatus()
-                    + " id=" + String.valueOf(event.getID()).substring(0, 8)
-                    + " ours=" + packsById.containsKey(event.getID())
-                    + " emptyPending=" + (diagPending != null && diagPending.contains(event.getID())));
-        }
         // Ball display fix, for packs from ANY plugin (ItemsAdder's join
         // pack included): hide the balls when a push is accepted, and
         // restore the real inventory on any terminal status.
